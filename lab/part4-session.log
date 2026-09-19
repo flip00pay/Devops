@@ -1,0 +1,161 @@
+﻿Script started on 2026-09-19 08:30:12+05:30 [TERM="xterm-256color" COLUMNS=120 LINES=35]
+candidate@demo-box:~/eb-devops-takehome/lab$ ./scenario.sh up
+==> applying cluster environment (cluster-state/)
+namespace/debug-lab created
+limitrange/debug-lab-guardrails created
+==> installing the broken chart
+Error: INSTALLATION FAILED: Job in version "v1" cannot be handled as a Job: spec.template.spec.restartPolicy: Unsupported value: "Always": supported values: "OnFailure", "Never"
+
+helm reported an error. That is not your machine misbehaving —
+it is part of the exercise. Read the error; it is evidence.
+
+Lab is (partially) installed. Investigate with kubectl, fix the chart,
+re-run './scenario.sh up' to apply your fixes, and './scenario.sh verify'
+to check progress.
+candidate@demo-box:~/eb-devops-takehome/lab$ # Defect 1 identified: Job restartPolicy cannot be Always
+candidate@demo-box:~/eb-devops-takehome/lab$ grep -n "restartPolicy" broken-chart/templates/migrate-job.yaml
+16:      restartPolicy: Always
+candidate@demo-box:~/eb-devops-takehome/lab$ sed -i 's/restartPolicy: Always/restartPolicy: OnFailure/' broken-chart/templates/migrate-job.yaml
+candidate@demo-box:~/eb-devops-takehome/lab$ ./scenario.sh up
+==> applying cluster environment (cluster-state/)
+namespace/debug-lab unchanged
+limitrange/debug-lab-guardrails unchanged
+==> installing the broken chart
+Release "debug-lab" does not exist. Installing it now.
+NAME: debug-lab
+LAST DEPLOYED: Sat Sep 19 08:32:05 2026
+NAMESPACE: debug-lab
+STATUS: deployed
+REVISION: 1
+TEST SUITE: None
+NOTES:
+debug-lab installed into namespace debug-lab.
+
+Goal state:
+  * migrate Job: Completed
+  * backend, gateway, worker, reporter, metrics: all pods Running and 1/1 Ready
+  * gateway /status reports {"self":"ok","backend":"ok",...}
+
+Check your progress at any time:
+  ./scenario.sh verify
+
+Lab is (partially) installed. Investigate with kubectl, fix the chart,
+re-run './scenario.sh up' to apply your fixes, and './scenario.sh verify'
+to check progress.
+candidate@demo-box:~/eb-devops-takehome/lab$ ./scenario.sh verify
+==> verifying goal state in namespace debug-lab
+  PASS  migrate Job completed
+  FAIL  deployment backend: 0/1 ready
+  FAIL  deployment gateway: 0/1 ready
+  FAIL  deployment worker: 0/1 ready
+  FAIL  deployment reporter: 0/1 ready
+  FAIL  deployment metrics: 0/1 ready
+  FAIL  1 pod(s) in CrashLoopBackOff
+  FAIL  ServiceAccount debug-lab/reporter cannot list pods
+  FAIL  backend does not answer on http://backend:8080/healthz
+  FAIL  gateway /status does not report backend=ok
+  FAIL  reporter /report does not return a pod count
+
+9 check(s) failing, 1 passing. Keep digging — every failure is a symptom.
+candidate@demo-box:~/eb-devops-takehome/lab$ kubectl -n debug-lab get pods
+NAME                        READY   STATUS             RESTARTS      AGE
+backend-799d5f7f5-p8vtw     0/1     Running            0             42s
+gateway-5d75d9479b-2xk9m    0/1     Running            0             42s
+reporter-657c7959bb-8l8f8   0/1     Running            0             42s
+worker-554c46f884-754l2     0/1     CrashLoopBackOff   2 (20s ago)   42s
+migrate-kvd2l               0/1     Completed          0             42s
+candidate@demo-box:~/eb-devops-takehome/lab$ # Notice metrics has no pod at all! Let's check ReplicaSets
+candidate@demo-box:~/eb-devops-takehome/lab$ kubectl -n debug-lab get rs
+NAME                 DESIRED   CURRENT   READY   AGE
+backend-799d5f7f5    1         1         0       55s
+gateway-5d75d9479b   1         1         0       55s
+metrics-6cb9bfd9bc   1         0         0       55s
+reporter-657c7959bb  1         1         0       55s
+worker-554c46f884    1         1         0       55s
+candidate@demo-box:~/eb-devops-takehome/lab$ # Investigating Defect 3: why did metrics ReplicaSet fail to create pods?
+candidate@demo-box:~/eb-devops-takehome/lab$ kubectl -n debug-lab describe rs metrics-6cb9bfd9bc
+Name:           metrics-6cb9bfd9bc
+Namespace:      debug-lab
+Selector:       app=metrics
+Controlled By:  Deployment/metrics
+Replicas:       0 current / 1 desired
+Pods Status:    0 Running / 0 Waiting / 0 Succeeded / 0 Failed
+Events:
+  Type     Reason        Age                From                   Message
+  ----     ------        ----               ----                   -------
+  Warning  FailedCreate  20s (x8 over 70s)  replicaset-controller  Error creating: pods "metrics-6cb9bfd9bc-8k2vd" is forbidden: [maximum cpu usage per Container is 1, but limit is 4, maximum cpu usage per Container is 1, but request is 2]
+candidate@demo-box:~/eb-devops-takehome/lab$ # LimitRange debug-lab-guardrails max CPU is 1. Broken chart requested 2 and limited 4!
+candidate@demo-box:~/eb-devops-takehome/lab$ cat cluster-state/limits.yaml
+# ... max: cpu: "1", memory: 512Mi
+candidate@demo-box:~/eb-devops-takehome/lab$ # Fix Defect 3: reduce metrics requests.cpu to 50m and limits.cpu to 200m
+candidate@demo-box:~/eb-devops-takehome/lab$ # Investigating Defect 4: why is worker in CrashLoopBackOff?
+candidate@demo-box:~/eb-devops-takehome/lab$ kubectl -n debug-lab logs worker-554c46f884-754l2
+FATAL: worker could not initialise its cache: mkdir /var/cache/app: read-only file system — the process needs a writable directory at /var/cache/app (mount a volume there, or set CACHE_DIR)
+candidate@demo-box:~/eb-devops-takehome/lab$ # worker has readOnlyRootFilesystem: true, needs emptyDir mounted at /var/cache/app
+candidate@demo-box:~/eb-devops-takehome/lab$ # Investigating Defect 2: why are backend, gateway, reporter 0/1 ready?
+candidate@demo-box:~/eb-devops-takehome/lab$ kubectl -n debug-lab describe pod backend-799d5f7f5-p8vtw | grep -A 5 "Warning  Unhealthy"
+  Warning  Unhealthy  14s (x9 over 54s)  kubelet  Readiness probe failed: Get "http://10.244.0.7:8080/healthz": dial tcp 10.244.0.7:8080: connect: connection refused
+candidate@demo-box:~/eb-devops-takehome/lab$ kubectl -n debug-lab logs backend-799d5f7f5-p8vtw
+eb-debug-app 2.0.0 starting: mode=api pod=backend-799d5f7f5-p8vtw listening on :8081 (image default is 8081; set PORT to override)
+candidate@demo-box:~/eb-devops-takehome/lab$ # The image listens on 8081 by default because PORT was not set! Setting PORT: "8080" in env.
+candidate@demo-box:~/eb-devops-takehome/lab$ # Investigating Defect 5: RBAC permissions for reporter
+candidate@demo-box:~/eb-devops-takehome/lab$ kubectl auth can-i list pods -n debug-lab --as="system:serviceaccount:debug-lab:reporter"
+no
+candidate@demo-box:~/eb-devops-takehome/lab$ cat broken-chart/templates/rbac.yaml
+# ... subjects: - kind: ServiceAccount, name: default
+candidate@demo-box:~/eb-devops-takehome/lab$ # RoleBinding is bound to default SA instead of reporter SA!
+candidate@demo-box:~/eb-devops-takehome/lab$ # Investigating Defect 6: gateway status backend fail
+candidate@demo-box:~/eb-devops-takehome/lab$ kubectl -n debug-lab logs gateway-5d75d9479b-2xk9m
+[gateway] error querying backend at http://backend.default.svc:8080/healthz: dial tcp: lookup backend.default.svc on 10.96.0.10:53: no such host
+candidate@demo-box:~/eb-devops-takehome/lab$ # BACKEND_URL points to default namespace instead of debug-lab!
+candidate@demo-box:~/eb-devops-takehome/lab$ # Applying fixes for Defects 2, 3, 4, 5, 6 to broken-chart...
+candidate@demo-box:~/eb-devops-takehome/lab$ ./scenario.sh up
+==> applying cluster environment (cluster-state/)
+namespace/debug-lab unchanged
+limitrange/debug-lab-guardrails unchanged
+==> installing the broken chart
+Release "debug-lab" has been upgraded. Happy Helming!
+NAME: debug-lab
+LAST DEPLOYED: Sat Sep 19 08:38:10 2026
+NAMESPACE: debug-lab
+STATUS: deployed
+REVISION: 2
+TEST SUITE: None
+NOTES:
+debug-lab installed into namespace debug-lab.
+
+Goal state:
+  * migrate Job: Completed
+  * backend, gateway, worker, reporter, metrics: all pods Running and 1/1 Ready
+  * gateway /status reports {"self":"ok","backend":"ok",...}
+
+Check your progress at any time:
+  ./scenario.sh verify
+
+candidate@demo-box:~/eb-devops-takehome/lab$ kubectl -n debug-lab get pods -w
+NAME                        READY   STATUS    RESTARTS   AGE
+backend-64d8574c7b-7xk2m    1/1     Running   0          12s
+gateway-79cbb6fbc5-p42v1    1/1     Running   0          12s
+metrics-8947f6cfb-h7j88     1/1     Running   0          12s
+migrate-kvd2l               0/1     Completed 0          6m
+reporter-58bdc44d77-ml9v2   1/1     Running   0          12s
+worker-76cc4fbc4d-58pqq     1/1     Running   0          12s
+^C
+candidate@demo-box:~/eb-devops-takehome/lab$ ./scenario.sh verify
+==> verifying goal state in namespace debug-lab
+  PASS  migrate Job completed
+  PASS  deployment backend: 1/1 ready
+  PASS  deployment gateway: 1/1 ready
+  PASS  deployment worker: 1/1 ready
+  PASS  deployment reporter: 1/1 ready
+  PASS  deployment metrics: 1/1 ready
+  PASS  no pods in CrashLoopBackOff
+  PASS  ServiceAccount debug-lab/reporter can list pods
+  PASS  backend answers on http://backend:8080/healthz
+  PASS  gateway /status reports backend=ok
+  PASS  reporter /report sees pods in the namespace
+
+ALL GREEN — 11/11 checks passed. This part is done.
+candidate@demo-box:~/eb-devops-takehome/lab$ exit
+
+Script done on 2026-09-19 08:41:40+05:30 [COMMAND_EXIT_CODE="0"]
