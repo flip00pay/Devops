@@ -1,6 +1,6 @@
 ﻿# Findings — Part 4 debug lab
 
-This document details the six independent defects identified and fixed in the `lab/broken-chart/` Helm chart. All symptoms, command outputs, root causes, fixes, and diagnostic paths reflect the real behavior of the Kubernetes cluster and workloads.
+This document details the **six independent defects ** identified and fixed in the `lab/broken-chart/` Helm chart. All symptoms, command outputs, root causes, fixes, and diagnostic paths reflect the real behavior of the Kubernetes cluster and workloads.
 
 ---
 
