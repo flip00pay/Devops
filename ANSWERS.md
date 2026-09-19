@@ -1,32 +1,41 @@
-﻿# Part 5 — Written Questions
+# Part 5 — Q1. Migrating ~40 Ingresses from `ingress-nginx` to Kubernetes Gateway API
 
-### Q1. Migrating ~40 Ingresses from `ingress-nginx` to Kubernetes Gateway API with Zero Downtime
+### Migration Approach
 
-#### Migration Strategy & Order of Operations
+I would not switch all 40 Ingresses at once. I would first understand what is currently being used and then migrate them gradually.
 
-1. **Audit & Annotation Inventory**:
-   - Inventory all 40 `Ingress` objects, noting custom NGINX annotations (`rewrite-target`, `proxy-body-size`, rate limits, external auth, TLS/cert-manager integrations).
-   - Flag non-standard features that do not map directly to standard Gateway API specs.
+1. **First, I would audit the existing Ingresses.**
+   - Check all 40 Ingress resources, including their hosts, paths, TLS settings, and NGINX-specific annotations.
+   - I would specifically look for things like URL rewrites, authentication, rate limits, custom timeouts, and cert-manager configuration.
+   - Anything that doesn't have a direct Gateway API equivalent would need to be handled separately.
 
-2. **Deploy Gateway Infrastructure in Parallel**:
-   - Install Gateway API standard CRDs (`GatewayClass`, `Gateway`, `HTTPRoute`).
-   - Deploy the new Gateway Controller (e.g., Envoy Gateway, Cilium, or Istio) alongside `ingress-nginx`, backed by its own dedicated LoadBalancer IP.
+2. **Set up the new Gateway alongside ingress-nginx.**
+   - Install the Gateway API CRDs and the Gateway controller.
+   - Keep the existing `ingress-nginx` controller running so current traffic is not affected.
+   - I would give the new Gateway its own endpoint so I can test it independently.
 
-3. **Dual-Route Provisioning**:
-   - Synthesize and apply equivalent `HTTPRoute` resources matching the 40 Ingresses, pointing to the same existing backend `Services`.
-   - Validate HTTPRoute routing, TLS handshakes, and SNI privately via `curl --resolve` against the new Gateway IP.
+3. **Create the HTTPRoutes and test them.**
+   - Create `HTTPRoute` resources that match the current Ingress behaviour and point them to the existing Services.
+   - Before sending real users to the new Gateway, test the routes, TLS certificates, SNI, redirects, and backend connectivity.
+   - I would use `curl` and the Gateway/controller logs to verify the behaviour.
 
-4. **Phased Canary Cutover (Zero Downtime)**:
-   - Route traffic through an edge layer (Cloudflare / Route53 / external ALB) using weighted DNS or weighted target groups (e.g., 5% -> 25% -> 100%).
-   - Migrate low-risk internal services first; observe 4xx/5xx metrics, latency, and access logs before cutting over tier-1 paths.
+4. **Move traffic gradually.**
+   - I would start with a small number of lower-risk services rather than migrating everything together.
+   - If the existing load balancer or DNS setup supports it, traffic can be moved gradually to the new Gateway.
+   - During the migration I would monitor 4xx/5xx errors, latency, logs, and backend health.
+   - If everything looks stable, continue moving the remaining services.
 
-5. **Decommissioning & Rollback Plan**:
-   - Keep `ingress-nginx` running untouched as a live rollback target for 48–72 hours.
-   - Decommission old Ingress objects only after traffic reaches 100% stable Gateway API operation.
+5. **Keep the old setup available for rollback.**
+   - I would keep `ingress-nginx` running until the Gateway setup has been stable for some time.
+   - If something goes wrong, traffic can be moved back to the existing Ingress setup.
+   - Once the migration is confirmed to be stable, the old Ingress resources and controller can be removed.
 
-#### What to Expect to Break Along the Way
+### Things I Expect Could Break
 
-- **Annotation Parity Gaps**: NGINX regex path rewrites, snippet injections, and custom timeouts lack 1:1 declarative equivalents in `HTTPRoute` and require vendor-specific `ExtensionRef` or custom filters.
-- **Client IP / Header Forwarding**: Changes in `X-Forwarded-For`, `X-Real-IP`, and proxy protocol handling between NGINX and the new gateway can disrupt geochecks, audit logs, or backend IP whitelisting.
-- **TLS & Certificate Ref Mismatches**: Secret references and SNI resolution across namespaces can fail if cross-namespace `ReferenceGrant` objects are missing.
-- **Persistent Connections**: WebSockets and gRPC connections may be dropped during cutover if buffer sizes or idle stream timeouts differ.
+- **NGINX annotations:** Some existing NGINX-specific annotations may not have a direct Gateway API equivalent. Rewrites, authentication, custom snippets, and timeout settings may need controller-specific solutions.
+- **Client IP and headers:** The new controller may handle `X-Forwarded-For` and other forwarded headers differently, which could affect logging or IP-based access rules.
+- **TLS configuration:** Certificate and Secret references need to be tested carefully, especially when resources are in different namespaces.
+- **WebSockets and gRPC:** Long-running connections should be tested because timeout and connection-handling defaults may be different.
+- **DNS and load balancing:** Any change to the external traffic path needs to be planned carefully to avoid sending traffic to a Gateway that is not ready.
+
+My main focus would be to **run both systems in parallel, test the Gateway before sending production traffic to it, move traffic gradually, and keep a working rollback path throughout the migration**.
