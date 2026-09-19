@@ -10,7 +10,7 @@ Complete implementation and debugging submission for the DevOps / Platform Engin
 .
 ├── .github/
 │   └── workflows/
-│       └── ci.yml              # Bonus: Chart linting, container build, Trivy vulnerability scan
+│       └── ci.yml              
 ├── setup.sh                    # Part 3 — Idempotent one-command deployment script
 ├── README.md                   # Part 6 — Complete documentation & disclosures
 ├── ANSWERS.md                  # Part 5 — Gateway API zero-downtime migration analysis
@@ -27,7 +27,7 @@ Complete implementation and debugging submission for the DevOps / Platform Engin
 │       ├── deployment.yaml
 │       ├── ingress.yaml
 │       └── service.yaml
-└── lab/                        # Part 4 — Debug lab with fixes
+└── lab/                        # Part 4 - Debug lab with fixes
     ├── scenario.sh             # Unmodified test harness
     ├── cluster-state/          # Unmodified namespace and LimitRange guardrails
     ├── broken-chart/           # Fixed chart resolving all 6 defects
@@ -180,7 +180,7 @@ To promote this stack to production, the following enhancements would be made:
 ## How I Used AI
 
 In compliance with the assignment policy:
-- **Tools Used**: Google Antigravity (powered by Gemini).
+- **Tools Used**:  Gemini
 - **Assisted Areas**:
   - Accelerated initial scaffolding of Helm templates, CI workflows, and documentation structures.
   - Inspected Go binary symbol tables and string offsets of `eb-debug-app` to cross-verify port and caching behaviors.
